@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from deepdiff import DeepDiff
 from typing import List, Dict
+from .logger_config import logger
 
 BASE_DIR = "./data/duckdb"
 
@@ -19,6 +20,7 @@ class MilvusDuckDBClient(MilvusClient):
         host = uri.split("://")[1].split(":")[0]
         duckdb_dir = kwargs.get("duckdb_dir", BASE_DIR)
         duckdb_path = f"{duckdb_dir}/{host}.db"
+        logger.info(f"Initializing MilvusDuckDBClient with Milvus URI: '{uri}', DuckDB path: '{duckdb_path}'")
         Path(duckdb_path).parent.mkdir(parents=True, exist_ok=True)
         self.duck_conn = duckdb.connect(duckdb_path)
         self.fields = []
@@ -62,7 +64,7 @@ class MilvusDuckDBClient(MilvusClient):
                 self.float_vector_fields.append(name)
         fields_sql = ", ".join(self.fields)
         create_sql = f"CREATE TABLE IF NOT EXISTS {collection_name} ({fields_sql});"
-        print(create_sql)
+        logger.debug(f"Create table SQL: {create_sql}")
         # Step 2: Start DuckDB transaction
         try:
             self.duck_conn.execute("BEGIN TRANSACTION;")
@@ -179,7 +181,7 @@ class MilvusDuckDBClient(MilvusClient):
         if count_res["milvus_count"] != count_res["duckdb_count"]:
             return False
         duckdb_pks_df = self.duck_conn.execute(f"SELECT {self.primary_field} FROM {collection_name}").fetchdf()
-        print(f"DuckDB PKs List:\n{duckdb_pks_df}")
+        logger.debug(f"DuckDB PKs List:\n{duckdb_pks_df}")
         for i in range(len(duckdb_pks_df)):
             pk = duckdb_pks_df[self.primary_field].iloc[i]
             milvus_data = super().query(collection_name, filter=f"{self.primary_field} == {pk}", output_fields=["*"])
@@ -197,14 +199,14 @@ class MilvusDuckDBClient(MilvusClient):
                 current_row_duckdb_df[field] = current_row_duckdb_df[field].apply(lambda x: list(x))
             milvus_data_dict = milvus_data_df.to_dict(orient="records")[0]
             current_row_duckdb_dict = current_row_duckdb_df.to_dict(orient="records")[0]
-            print(f"Milvus data for pk={pk}:\n{milvus_data_dict}")
+            logger.debug(f"Milvus data for pk={pk}:\n{milvus_data_dict}")
 
-            print(f"DuckDB data for pk={pk}:\n{current_row_duckdb_dict}")
+            logger.debug(f"DuckDB data for pk={pk}:\n{current_row_duckdb_dict}")
             # compare
             diff = DeepDiff(milvus_data_dict, current_row_duckdb_dict, ignore_order=True)
             if diff:
-                print(f"diff: {diff}")
-                print(f"Data for pk={pk} does not match between Milvus and DuckDB\nMilvus: {milvus_data_dict}\nDuckDB: {current_row_duckdb_dict}")
+                logger.error(f"diff: {diff}")
+                logger.error(f"Data for pk={pk} does not match between Milvus and DuckDB\nMilvus: {milvus_data_dict}\nDuckDB: {current_row_duckdb_dict}")
                 return False
 
 
