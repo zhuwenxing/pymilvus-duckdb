@@ -5,10 +5,22 @@
 groups = ["default"]
 strategy = []
 lock_version = "4.5.0"
-content_hash = "sha256:4750efb3f144d73a537db4659604716db0ac401a907444f970dd8eba7898e35b"
+content_hash = "sha256:6e7ec1b6919aa07b728a29abfde99b96836ff99c0606d962c6a621115733e274"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
+
+[[package]]
+name = "deepdiff"
+version = "8.5.0"
+summary = ""
+dependencies = [
+    "orderly-set",
+]
+files = [
+    {file = "deepdiff-8.5.0-py3-none-any.whl", hash = "sha256:d4599db637f36a1c285f5fdfc2cd8d38bde8d8be8636b65ab5e425b67c54df26"},
+    {file = "deepdiff-8.5.0.tar.gz", hash = "sha256:a4dd3529fa8d4cd5b9cbb6e3ea9c95997eaa919ba37dac3966c1b8f872dc1cd1"},
+]
 
 [[package]]
 name = "duckdb"
@@ -164,6 +176,15 @@ files = [
     {file = "numpy-2.2.6-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce47521a4754c8f4593837384bd3424880629f718d87c5d44f8ed763edd63543"},
     {file = "numpy-2.2.6-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:d042d24c90c41b54fd506da306759e06e568864df8ec17ccc17e9e884634fd00"},
     {file = "numpy-2.2.6.tar.gz", hash = "sha256:e29554e2bef54a90aa5cc07da6ce955accb83f21ab5de01a62c8478897b264fd"},
+]
+
+[[package]]
+name = "orderly-set"
+version = "5.4.1"
+summary = ""
+files = [
+    {file = "orderly_set-5.4.1-py3-none-any.whl", hash = "sha256:b5e21d21680bd9ef456885db800c5cb4f76a03879880c0175e1b077fb166fd83"},
+    {file = "orderly_set-5.4.1.tar.gz", hash = "sha256:a1fb5a4fdc5e234e9e8d8e5c1bbdbc4540f4dfe50d12bf17c8bc5dbf1c9c878d"},
 ]
 
 [[package]]

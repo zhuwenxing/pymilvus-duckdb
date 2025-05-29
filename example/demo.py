@@ -55,6 +55,12 @@ print(res)
 res = milvus_client.export(collection_name)
 print(res)
 
+res = milvus_client.count(collection_name)
+print(res)
+
+milvus_client.compare(collection_name)
+
+
     
 
 

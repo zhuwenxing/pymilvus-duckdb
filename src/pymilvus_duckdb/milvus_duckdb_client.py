@@ -4,6 +4,7 @@ import duckdb
 import pandas as pd
 import json
 from pathlib import Path
+from deepdiff import DeepDiff
 from typing import List, Dict
 
 BASE_DIR = "./data/duckdb"
@@ -24,6 +25,8 @@ class MilvusDuckDBClient(MilvusClient):
         self.primary_field = ""
         self.fields_name_list = []
         self.json_fields = []
+        self.array_fields = []
+        self.float_vector_fields = []
     
     def __del__(self):
         self.duck_conn.close()
@@ -53,7 +56,10 @@ class MilvusDuckDBClient(MilvusClient):
             self.fields_name_list.append(name)
             if field.dtype == DataType.JSON:
                 self.json_fields.append(name)
-
+            if field.dtype == DataType.ARRAY:
+                self.array_fields.append(name)
+            if field.dtype == DataType.FLOAT_VECTOR:
+                self.float_vector_fields.append(name)
         fields_sql = ", ".join(self.fields)
         create_sql = f"CREATE TABLE IF NOT EXISTS {collection_name} ({fields_sql});"
         print(create_sql)
@@ -64,7 +70,7 @@ class MilvusDuckDBClient(MilvusClient):
             self.duck_conn.execute(create_sql)
             try:
                 # Step 4: Create collection in Milvus
-                result = super().create_collection(collection_name, schema=schema, **kwargs)
+                result = super().create_collection(collection_name, schema=schema, consistency_level="Strong", **kwargs)
             except Exception as milvus_exc:
                 # Step 5: If Milvus fails, rollback DuckDB and drop table if created
                 self.duck_conn.execute(f"DROP TABLE IF EXISTS {collection_name};")
@@ -156,9 +162,54 @@ class MilvusDuckDBClient(MilvusClient):
             raise RuntimeError(f"Milvus upsert failed, DuckDB rolled back: {e}")
 
     def export(self, collection_name: str):
+        # only for duckdb, milvus does not support export
         return self.duck_conn.execute(f"SELECT * FROM {collection_name}").fetchdf()
 
+    def count(self, collection_name: str):
+        milvus_count = super().query(collection_name, filter="", output_fields=["count(*)"])
+        duckdb_count = self.duck_conn.execute(f"SELECT COUNT(*) FROM {collection_name}").fetchone()
+        res = {
+            "milvus_count": milvus_count[0]["count(*)"],
+            "duckdb_count": duckdb_count[0]
+        }
+        return res
 
+    def compare(self, collection_name: str):
+        count_res = self.count(collection_name)
+        if count_res["milvus_count"] != count_res["duckdb_count"]:
+            return False
+        duckdb_pks_df = self.duck_conn.execute(f"SELECT {self.primary_field} FROM {collection_name}").fetchdf()
+        print(f"DuckDB PKs List:\n{duckdb_pks_df}")
+        for i in range(len(duckdb_pks_df)):
+            pk = duckdb_pks_df[self.primary_field].iloc[i]
+            milvus_data = super().query(collection_name, filter=f"{self.primary_field} == {pk}", output_fields=["*"])
+            milvus_data_df = pd.DataFrame(milvus_data)
+            current_row_duckdb_df = self.duck_conn.execute(f"SELECT * FROM {collection_name} WHERE {self.primary_field} = {pk}").fetchdf()
+            
+            for field in self.json_fields:
+                # milvus_data_df[field] = milvus_data_df[field].apply(lambda x: json.loads(x))
+                current_row_duckdb_df[field] = current_row_duckdb_df[field].apply(lambda x: json.loads(x))
+            for field in self.array_fields:
+                milvus_data_df[field] = milvus_data_df[field].apply(lambda x: list(x))
+                current_row_duckdb_df[field] = current_row_duckdb_df[field].apply(lambda x: list(x))
+            for field in self.float_vector_fields:
+                milvus_data_df[field] = milvus_data_df[field].apply(lambda x: list(x))
+                current_row_duckdb_df[field] = current_row_duckdb_df[field].apply(lambda x: list(x))
+            milvus_data_dict = milvus_data_df.to_dict(orient="records")[0]
+            current_row_duckdb_dict = current_row_duckdb_df.to_dict(orient="records")[0]
+            print(f"Milvus data for pk={pk}:\n{milvus_data_dict}")
+
+            print(f"DuckDB data for pk={pk}:\n{current_row_duckdb_dict}")
+            # compare
+            diff = DeepDiff(milvus_data_dict, current_row_duckdb_dict, ignore_order=True)
+            if diff:
+                print(f"diff: {diff}")
+                print(f"Data for pk={pk} does not match between Milvus and DuckDB\nMilvus: {milvus_data_dict}\nDuckDB: {current_row_duckdb_dict}")
+                return False
+
+
+        return True
+    
     def _milvus_dtype_to_duckdb(self, milvus_type):
         MilvusDataTypeToDuckDBType= {
             DataType.BOOL: "BOOLEAN",
