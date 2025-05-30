@@ -71,4 +71,14 @@ print(res)
 res = milvus_client.count(collection_name)
 print(res)
 
-milvus_client.compare(collection_name)
+milvus_client.entity_compare(collection_name)
+
+
+# Example: Automatically generate a diverse Milvus filter expression
+filter_expr = milvus_client.generate_milvus_filter(collection_name, num_samples=2)
+print("\n[Auto Milvus Filter Example]\n", filter_expr)
+for filter in filter_expr:
+    print(filter)
+    res = milvus_client.query_result_compare(collection_name, filter)
+    print(res)
+

@@ -1,7 +1,9 @@
 import json
+import random
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 from deepdiff import DeepDiff
 from pymilvus import Collection, CollectionSchema, DataType, MilvusClient, connections
@@ -451,3 +453,121 @@ class MilvusDuckDBClient(MilvusClient):
             raise ValueError(
                 f"Unsupported data type: {milvus_type} when converting Milvus data type to DuckDB data type"
             )
+
+    def sample_data(self, collection_name: str, num_samples: int = 100):
+        """
+        Sample data from the specified DuckDB collection.
+
+        Args:
+            collection_name (str): The name of the DuckDB table.
+            num_samples (int): Number of rows to sample.
+
+        Returns:
+            pd.DataFrame: Sampled data as a DataFrame.
+        """
+        # Check schema and primary key
+        self._get_schema(collection_name)
+        # Use DuckDB's SAMPLE clause for efficient sampling
+        query = f"SELECT * FROM {collection_name} USING SAMPLE {num_samples} ROWS"
+        sampled_df = self.duck_conn.execute(query).fetchdf()
+        return sampled_df
+
+    def generate_milvus_filter(self, collection_name: str, num_samples: int = 100) -> str:
+        """
+        Generate diverse Milvus filter expressions from sample DataFrame using all scalar, JSON, and ARRAY fields.
+
+        Args:
+            collection_name (str): The name of the DuckDB/Milvus table.
+            num_samples (int): Number of rows to sample.
+
+        Returns:
+            str: Milvus filter expression.
+        """
+        df = self.sample_data(collection_name, num_samples)
+        schema = self._get_schema(collection_name)
+        scalar_types = {"BOOL", "INT8", "INT16", "INT32", "INT64", "FLOAT", "DOUBLE", "VARCHAR"}
+        exprs = []
+        for field in [f for f in schema.fields if f.dtype.name in scalar_types and f.name in df.columns]:
+            series = df[field.name]
+            # Handle null value
+            if series.isnull().any():
+                exprs.append(f"{field.name} IS NULL")
+                exprs.append(f"{field.name} IS NOT NULL")
+            # Get unique values, handle unhashable types
+            dtype_name = field.dtype.name
+            values = series.dropna().unique()
+            # Only one unique value
+            if len(values) == 1:
+                val = values[0]
+                if dtype_name == "VARCHAR":
+                    exprs.append(f"{field.name} == '{val}'")
+                    exprs.append(f"{field.name} != '{val}'")
+                    # LIKE expressions for strings
+                    if len(val) > 2:
+                        exprs.append(f"{field.name} LIKE '{val[:2]}%'")  # prefix
+                        exprs.append(f"{field.name} LIKE '%{val[-2:]}'")  # suffix
+                        exprs.append(f"{field.name} LIKE '%{val[1:-1]}%'")  # infix
+                else:
+                    exprs.append(f"{field.name} == {val}")
+                    exprs.append(f"{field.name} != {val}")
+            elif len(values) > 1:
+                # Numeric fields
+                if np.issubdtype(series.dtype, np.number):
+                    minv, maxv = np.min(values), np.max(values)
+                    exprs.append(f"{field.name} > {minv}")
+                    exprs.append(f"{field.name} < {maxv}")
+                    exprs.append(f"{field.name} >= {minv}")
+                    exprs.append(f"{field.name} <= {maxv}")
+                    # Modulus example if int
+                    if np.issubdtype(series.dtype, np.integer):
+                        exprs.append(f"{field.name} % 2 == 0")
+                    else:
+                        # Arithmetic operators
+                        exprs.append(f"{field.name} + 1 == {minv + 1}")
+                        exprs.append(f"{field.name} - 1 == {minv - 1}")
+                        exprs.append(f"{field.name} * 2 == {minv * 2}")
+                        exprs.append(f"{field.name} / 2 == {minv / 2}")
+                        exprs.append(f"{field.name} % 2 == 0")
+                        exprs.append(f"{field.name} ** 2 == {minv**2}")
+
+                    # Range (between)
+                    exprs.append(f"{field.name} >= {minv} AND {field.name} <= {maxv}")
+                    # in/not in
+                    vals = ", ".join(str(v) for v in values[:5])
+                    exprs.append(f"{field.name} in [{vals}]")
+                    exprs.append(f"{field.name} not in [{vals}]")
+                # String fields
+                elif isinstance(values[0], str):
+                    vals = ", ".join(f"'{v}'" for v in values[:5])
+                    exprs.append(f"{field.name} in [{vals}]")
+                    exprs.append(f"{field.name} not in [{vals}]")
+                    # LIKE: prefix/suffix/infix
+                    for v in values[:3]:
+                        if len(v) > 2:
+                            exprs.append(f"{field.name} LIKE '{v[:2]}%'")
+                            exprs.append(f"{field.name} LIKE '%{v[-2:]}'")
+                            exprs.append(f"{field.name} LIKE '%{v[1:-1]}%'")
+                # Bool fields
+                elif dtype_name == "BOOL":
+                    for v in values:
+                        exprs.append(f"{field.name} == {str(v).lower()}")
+                        exprs.append(f"{field.name} != {str(v).lower()}")
+                ## TODO: support JSON and ARRAY fields
+                # # JSON fields
+                # elif dtype_name == "JSON":
+                #     for v in values[:3]:
+                #         exprs.append(f"{field.name} == '{json.dumps(v)}'")
+                #         exprs.append(f"{field.name} != '{json.dumps(v)}'")
+                #         for k, val in v.items():
+                #             exprs.append(f"{field.name}.{k} == '{val}'")
+                #             exprs.append(f"{field.name}.{k} != '{val}'")
+                # # ARRAY fields
+                # elif dtype_name == "ARRAY":
+                #     for v in values[:3]:
+                #         exprs.append(f"{field.name} == {v}")
+                #         exprs.append(f"{field.name} != {v}")
+                #         for i, val in enumerate(v):
+                #             exprs.append(f"{field.name}[{i}] == {val}")
+                #             exprs.append(f"{field.name}[{i}] != {val}")
+        return exprs
+

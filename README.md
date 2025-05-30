@@ -7,6 +7,7 @@
 *   **Milvus Client Extension**: Extends the `MilvusClient` functionality.
 *   **Data Synchronization**: Keeps data in Milvus and a local DuckDB instance synchronized.
 *   **Data Export**: Allows exporting collection data from the synchronized DuckDB instance.
+*   **Query Correctness Validation**: Enables verification of Milvus query results by comparing it against a synchronized DuckDB instance.
 *   **Milvus Data Correctness Validation**: Enables verification of Milvus data by comparing it against a synchronized DuckDB instance.
 
 ## Installation
