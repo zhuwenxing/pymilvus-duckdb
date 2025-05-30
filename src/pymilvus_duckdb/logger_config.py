@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 import sys
+
 from loguru import logger
 
 # Default logger configuration
@@ -26,6 +26,7 @@ logger.add(
 #     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
 # )
 
+
 def set_logger_level(level: str):
     """
     Dynamically set the log level for the logger.
@@ -37,12 +38,13 @@ def set_logger_level(level: str):
         sys.stderr,
         level=level.upper(),
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         colorize=True,
         backtrace=True,
         diagnose=True,
     )
+
 
 # Export the configured logger instance and the set_logger_level function
 __all__ = ["logger", "set_logger_level"]

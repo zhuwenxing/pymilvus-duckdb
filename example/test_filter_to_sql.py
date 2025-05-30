@@ -1,30 +1,26 @@
-# coding: utf-8
 """
 Test script for MilvusDuckDBClient._milvus_filter_to_sql
 Verify the correctness of converting Milvus filter expressions to SQL WHERE expressions.
 """
 
-from pymilvus_duckdb import MilvusDuckDBClient
-from pymilvus import CollectionSchema, FieldSchema, DataType
+from pymilvus import CollectionSchema, DataType, FieldSchema
 from pymilvus.milvus_client import IndexParams
+
+from pymilvus_duckdb import MilvusDuckDBClient
 
 
 # Build test collection schema
 def build_schema():
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=False),
-        FieldSchema(
-            name="status", dtype=DataType.VARCHAR, max_length=20, nullable=True
-        ),
+        FieldSchema(name="status", dtype=DataType.VARCHAR, max_length=20, nullable=True),
         FieldSchema(name="age", dtype=DataType.INT32, nullable=True),
         FieldSchema(name="price", dtype=DataType.FLOAT, nullable=True),
         FieldSchema(name="rating", dtype=DataType.INT32, nullable=True),
         FieldSchema(name="discount", dtype=DataType.FLOAT, nullable=True),
         FieldSchema(name="color", dtype=DataType.VARCHAR, max_length=10, nullable=True),
         FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=32, nullable=True),
-        FieldSchema(
-            name="description", dtype=DataType.VARCHAR, max_length=128, nullable=True
-        ),
+        FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=128, nullable=True),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=8),
     ]
     return CollectionSchema(fields, description="test schema")
@@ -110,9 +106,7 @@ def main():
     # Create collection
     schema = build_schema()
     index_params = IndexParams()
-    index_params.add_index(
-        "embedding", metric_type="L2", index_type="IVF_FLAT", params={"nlist": 128}
-    )
+    index_params.add_index("embedding", metric_type="L2", index_type="IVF_FLAT", params={"nlist": 128})
     client.create_collection(collection_name, schema=schema, index_params=index_params)
     client.load_collection(collection_name)
     # Insert test data
@@ -133,9 +127,7 @@ def main():
     print("\n=== Query verification ===")
     for f in test_filters:
         sql_where = client._milvus_filter_to_sql(f)
-        milvus_res, duckdb_res = client.query(
-            collection_name, filter=f, output_fields=["*"]
-        )
+        milvus_res, duckdb_res = client.query(collection_name, filter=f, output_fields=["*"])
         print(f"\nMilvus filter: {f}")
         print(f"SQL where:    {sql_where}")
         print("Milvus result:")

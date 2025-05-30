@@ -1,10 +1,9 @@
 import logging
+
 from pymilvus_duckdb import MilvusDuckDBClient as MilvusClient
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # --- Configuration ---
 MILVUS_URI = "http://10.104.21.143:19530"  # URI for Milvus server

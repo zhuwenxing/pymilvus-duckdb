@@ -1,11 +1,11 @@
-from pymilvus import MilvusClient, CollectionSchema
-from pymilvus import DataType, connections, Collection
-import duckdb
-import pandas as pd
 import json
 from pathlib import Path
+
+import duckdb
+import pandas as pd
 from deepdiff import DeepDiff
-from typing import List, Dict
+from pymilvus import Collection, CollectionSchema, DataType, MilvusClient, connections
+
 from .logger_config import logger
 
 BASE_DIR = "./data/duckdb"
@@ -23,9 +23,7 @@ class MilvusDuckDBClient(MilvusClient):
         host = uri.split("://")[1].split(":")[0]
         duckdb_dir = kwargs.get("duckdb_dir", BASE_DIR)
         duckdb_path = f"{duckdb_dir}/{host}.db"
-        logger.info(
-            f"Initializing MilvusDuckDBClient with Milvus URI: '{uri}', DuckDB path: '{duckdb_path}'"
-        )
+        logger.info(f"Initializing MilvusDuckDBClient with Milvus URI: '{uri}', DuckDB path: '{duckdb_path}'")
         Path(duckdb_path).parent.mkdir(parents=True, exist_ok=True)
         self.duck_conn = duckdb.connect(duckdb_path)
         self.fields = []
@@ -55,9 +53,7 @@ class MilvusDuckDBClient(MilvusClient):
                 self.varchar_fields.append(field.name)
         return schema
 
-    def create_collection(
-        self, collection_name: str, schema: CollectionSchema = None, **kwargs
-    ):
+    def create_collection(self, collection_name: str, schema: CollectionSchema = None, **kwargs):
         """
         Create a collection: first create table in DuckDB (in transaction), then create collection in Milvus.
         Rollback if any error happens to guarantee atomicity.
@@ -98,9 +94,7 @@ class MilvusDuckDBClient(MilvusClient):
             self.duck_conn.execute(create_sql)
             try:
                 # Step 4: Create collection in Milvus
-                result = super().create_collection(
-                    collection_name, schema=schema, consistency_level="Strong", **kwargs
-                )
+                result = super().create_collection(collection_name, schema=schema, consistency_level="Strong", **kwargs)
             except Exception as milvus_exc:
                 # Step 5: If Milvus fails, rollback DuckDB and drop table if created
                 self.duck_conn.execute(f"DROP TABLE IF EXISTS {collection_name};")
@@ -126,17 +120,13 @@ class MilvusDuckDBClient(MilvusClient):
                 self.duck_conn.execute("COMMIT;")
             except Exception as milvus_exc:
                 self.duck_conn.execute("ROLLBACK;")
-                logger.error(
-                    f"Failed to drop collection '{collection_name}' in Milvus or DuckDB: {milvus_exc}"
-                )
+                logger.error(f"Failed to drop collection '{collection_name}' in Milvus or DuckDB: {milvus_exc}")
                 raise milvus_exc
         except Exception as duckdb_exc:
-            logger.error(
-                f"Failed to start DuckDB transaction or drop table: {duckdb_exc}"
-            )
+            logger.error(f"Failed to start DuckDB transaction or drop table: {duckdb_exc}")
             raise duckdb_exc
 
-    def insert(self, collection_name: str, data: List[Dict], **kwargs):
+    def insert(self, collection_name: str, data: list[dict], **kwargs):
         """
         Insert data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
@@ -154,7 +144,8 @@ class MilvusDuckDBClient(MilvusClient):
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
             # DuckDB write failed, return failure
-            raise RuntimeError(f"DuckDB insert failed: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"DuckDB insert failed: {e}") from e
         try:
             # Insert into Milvus
             result = super().insert(collection_name, data, **kwargs)
@@ -163,9 +154,10 @@ class MilvusDuckDBClient(MilvusClient):
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
             # Milvus write failed, rollback DuckDB
-            raise RuntimeError(f"Milvus insert failed, DuckDB rolled back: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"Milvus insert failed, DuckDB rolled back: {e}") from e
 
-    def delete(self, collection_name: str, ids: List[int | str], **kwargs):
+    def delete(self, collection_name: str, ids: list[int | str], **kwargs):
         """
         Delete data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
@@ -178,16 +170,18 @@ class MilvusDuckDBClient(MilvusClient):
             self.duck_conn.execute(delete_sql)
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
-            raise RuntimeError(f"DuckDB delete failed: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"DuckDB delete failed: {e}") from e
         try:
             result = super().delete(collection_name, ids=ids, **kwargs)
             self.duck_conn.execute("COMMIT;")
             return result
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
-            raise RuntimeError(f"Milvus delete failed, DuckDB rolled back: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"Milvus delete failed, DuckDB rolled back: {e}") from e
 
-    def upsert(self, collection_name: str, data: List[Dict], **kwargs):
+    def upsert(self, collection_name: str, data: list[dict], **kwargs):
         """
         Upsert data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
@@ -205,19 +199,22 @@ class MilvusDuckDBClient(MilvusClient):
                                         {", ".join([f"{col} = EXCLUDED.{col}" for col in self.fields_name_list])}""")
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
-            raise RuntimeError(f"DuckDB upsert failed: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"DuckDB upsert failed: {e}") from e
         try:
             result = super().upsert(collection_name, data, **kwargs)
             self.duck_conn.execute("COMMIT;")
             return result
         except Exception as e:
             self.duck_conn.execute("ROLLBACK;")
-            raise RuntimeError(f"Milvus upsert failed, DuckDB rolled back: {e}")
+            # Raise with exception context for better debugging
+            raise RuntimeError(f"Milvus upsert failed, DuckDB rolled back: {e}") from e
 
     def _milvus_filter_to_sql(self, filter: str):
         """
         Convert a Milvus filter expression to a SQL WHERE expression for DuckDB.
-        Supports: ==, !=, >, <, >=, <=, IN, LIKE, IS NULL, IS NOT NULL, AND, OR, NOT, JSON/ARRAY key/index access, arithmetic ops.
+        Supports: ==, !=, >, <, >=, <=, IN, LIKE, IS NULL, IS NOT NULL, AND, OR, NOT, \
+        JSON/ARRAY key/index access, arithmetic ops.
         """
         import re
 
@@ -242,9 +239,7 @@ class MilvusDuckDBClient(MilvusClient):
             values = match.group(2)
             # Convert [a, b, c] or ["a", "b"] to ('a','b')
             pylist = eval(values)
-            sql_list = ", ".join(
-                [f"'{v}'" if isinstance(v, str) else str(v) for v in pylist]
-            )
+            sql_list = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in pylist])
             return f"{field} IN ({sql_list})"
 
         expr = re.sub(r"(\w+)\s+in\s+(\[[^\]]*\])", in_repl, expr, flags=re.IGNORECASE)
@@ -268,12 +263,11 @@ class MilvusDuckDBClient(MilvusClient):
 
         return expr
 
-    def query(
-        self, collection_name: str, filter: str = "", output_fields: List[str] = ["*"]
-    ):
-        milvus_res = super().query(
-            collection_name, filter=filter, output_fields=output_fields
-        )
+    def query(self, collection_name: str, filter: str = "", output_fields: list[str] = None):
+        # Avoid mutable default argument
+        if output_fields is None:
+            output_fields = ["*"]
+        milvus_res = super().query(collection_name, filter=filter, output_fields=output_fields)
         milvus_res = pd.DataFrame(milvus_res)
         sql_filter = self._milvus_filter_to_sql(filter)
         duckdb_res = self.duck_conn.execute(
@@ -288,12 +282,8 @@ class MilvusDuckDBClient(MilvusClient):
         return self.duck_conn.execute(f"SELECT * FROM {collection_name}").fetchdf()
 
     def count(self, collection_name: str):
-        milvus_count = super().query(
-            collection_name, filter="", output_fields=["count(*)"]
-        )
-        duckdb_count = self.duck_conn.execute(
-            f"SELECT COUNT(*) FROM {collection_name}"
-        ).fetchone()
+        milvus_count = super().query(collection_name, filter="", output_fields=["count(*)"])
+        duckdb_count = self.duck_conn.execute(f"SELECT COUNT(*) FROM {collection_name}").fetchone()
         res = {
             "milvus_count": milvus_count[0]["count(*)"],
             "duckdb_count": duckdb_count[0],
@@ -302,15 +292,9 @@ class MilvusDuckDBClient(MilvusClient):
 
     def _align_df(self, milvus_df: pd.DataFrame, duckdb_df: pd.DataFrame):
         # If primary_field is not already index, set it as index
-        if (
-            self.primary_field not in milvus_df.index.names
-            and self.primary_field in milvus_df.columns
-        ):
+        if self.primary_field not in milvus_df.index.names and self.primary_field in milvus_df.columns:
             milvus_df.set_index(self.primary_field, inplace=True)
-        if (
-            self.primary_field not in duckdb_df.index.names
-            and self.primary_field in duckdb_df.columns
-        ):
+        if self.primary_field not in duckdb_df.index.names and self.primary_field in duckdb_df.columns:
             duckdb_df.set_index(self.primary_field, inplace=True)
         # Only keep columns that exist in both DataFrames, and align column order
         common_cols = [col for col in milvus_df.columns if col in duckdb_df.columns]
@@ -321,9 +305,7 @@ class MilvusDuckDBClient(MilvusClient):
         for field in self.json_fields:
             if field in duckdb_df.columns:
                 duckdb_df[field] = duckdb_df[field].apply(
-                    lambda x: json.loads(x)
-                    if isinstance(x, str) and x and x[0] in ["{", "[", '"']
-                    else x
+                    lambda x: json.loads(x) if isinstance(x, str) and x and x[0] in ["{", "[", '"'] else x
                 )
             if field in milvus_df.columns:
                 milvus_df[field] = milvus_df[field].apply(
@@ -336,15 +318,11 @@ class MilvusDuckDBClient(MilvusClient):
         for field in self.array_fields + self.float_vector_fields:
             if field in milvus_df.columns:
                 milvus_df[field] = milvus_df[field].apply(
-                    lambda x: list(x)
-                    if not isinstance(x, list) and x is not None
-                    else x
+                    lambda x: list(x) if not isinstance(x, list) and x is not None else x
                 )
             if field in duckdb_df.columns:
                 duckdb_df[field] = duckdb_df[field].apply(
-                    lambda x: list(x)
-                    if not isinstance(x, list) and x is not None
-                    else x
+                    lambda x: list(x) if not isinstance(x, list) and x is not None else x
                 )
 
         # Align indexes in batch, only compare primary keys that exist in both sides
@@ -367,12 +345,11 @@ class MilvusDuckDBClient(MilvusClient):
             return diff
         return diff
 
-    def query_result_compare(
-        self, collection_name: str, filter: str = "", output_fields: List[str] = ["*"]
-    ):
-        milvus_res, duckdb_res = self.query(
-            collection_name, filter=filter, output_fields=output_fields
-        )
+    def query_result_compare(self, collection_name: str, filter: str = "", output_fields: list[str] = None):
+        # Avoid mutable default argument
+        if output_fields is None:
+            output_fields = ["*"]
+        milvus_res, duckdb_res = self.query(collection_name, filter=filter, output_fields=output_fields)
         milvus_res_df = pd.DataFrame(milvus_res)
         duckdb_res_df = pd.DataFrame(duckdb_res)
         logger.info(f"Milvus query result:\n{milvus_res_df}")
@@ -380,12 +357,14 @@ class MilvusDuckDBClient(MilvusClient):
         diff = self._compare_df(milvus_res_df, duckdb_res_df)
         if diff:
             logger.error(
-                f"Query result mismatch for collection '{collection_name}' with filter '{filter}' and output fields '{output_fields}'."
+                f"Query result mismatch for collection '{collection_name}' with filter "
+                f"'{filter}' and output fields '{output_fields}'."
             )
             return diff
         else:
             logger.info(
-                f"Query result match for collection '{collection_name}' with filter '{filter}' and output fields '{output_fields}'."
+                f"Query result match for collection '{collection_name}' with filter "
+                f"'{filter}' and output fields '{output_fields}'."
             )
         return diff
 
@@ -394,17 +373,15 @@ class MilvusDuckDBClient(MilvusClient):
         count_res = self.count(collection_name)
         if count_res["milvus_count"] != count_res["duckdb_count"]:
             logger.error(
-                f"Count mismatch for collection '{collection_name}': Milvus ({count_res['milvus_count']}) vs DuckDB ({count_res['duckdb_count']}). Comparison aborted."
+                f"Count mismatch for collection '{collection_name}': Milvus "
+                f"({count_res['milvus_count']}) vs DuckDB ({count_res['duckdb_count']}). "
+                f"Comparison aborted."
             )
             return False
-        duckdb_pks_df = self.duck_conn.execute(
-            f"SELECT {self.primary_field} FROM {collection_name}"
-        ).fetchdf()
-        logger.debug(f"DuckDB PKs List:\n{duckdb_pks_df}")
+        duckdb_pks_df = self.duck_conn.execute(f"SELECT {self.primary_field} FROM {collection_name}").fetchdf()
         total_pks = len(duckdb_pks_df)
-        logger.info(
-            f"Starting comparison for {total_pks} entries in collection '{collection_name}'."
-        )
+        logger.debug(f"DuckDB PKs List:\n{duckdb_pks_df}")
+        logger.info(f"Starting comparison for {total_pks} entries in collection '{collection_name}'.")
         # Define logging milestones
         milestones_to_log_at = set()
         if total_pks > 0:
@@ -412,24 +389,18 @@ class MilvusDuckDBClient(MilvusClient):
             milestones_to_log_at.add(max(1, total_pks // 4))
             milestones_to_log_at.add(max(1, total_pks // 2))
             milestones_to_log_at.add(max(1, (total_pks * 3) // 4))
-            milestones_to_log_at.add(
-                total_pks
-            )  # Ensure the last item completion is logged
+            milestones_to_log_at.add(total_pks)  # Ensure the last item completion is logged
         # Batch fetch all primary keys
         pks = duckdb_pks_df[self.primary_field].tolist()
         if not pks:
-            logger.info(
-                f"No primary keys found in DuckDB for collection '{collection_name}'."
-            )
+            logger.info(f"No primary keys found in DuckDB for collection '{collection_name}'.")
             return True
         compared_count = 0
         for batch_start in range(0, len(pks), batch_size):
             batch_pks = pks[batch_start : batch_start + batch_size]
             # Query Milvus in batches
             milvus_filter = f"{self.primary_field} in {list(batch_pks)}"
-            milvus_data = super().query(
-                collection_name, filter=milvus_filter, output_fields=["*"]
-            )
+            milvus_data = super().query(collection_name, filter=milvus_filter, output_fields=["*"])
             milvus_data_df = pd.DataFrame(milvus_data)
             # Query DuckDB in batches
             duckdb_data_df = self.duck_conn.execute(
@@ -438,36 +409,27 @@ class MilvusDuckDBClient(MilvusClient):
 
             diff = self._compare_df(milvus_data_df, duckdb_data_df)
             if diff:
-                logger.error(
-                    f"Found difference(s) between Milvus and DuckDB for batch PKs:\n{diff}"
-                )
+                logger.error(f"Found difference(s) between Milvus and DuckDB for batch PKs:\n{diff}")
 
             # Check for primary keys that exist in DuckDB but not in Milvus
             only_in_duckdb = duckdb_data_df.index.difference(milvus_data_df.index)
             if len(only_in_duckdb) > 0:
-                logger.error(
-                    f"PK(s) only in DuckDB, not found in Milvus: {list(only_in_duckdb)}"
-                )
+                logger.error(f"PK(s) only in DuckDB, not found in Milvus: {list(only_in_duckdb)}")
 
             # Check for primary keys that exist in Milvus but not in DuckDB
             only_in_milvus = milvus_data_df.index.difference(duckdb_data_df.index)
             if len(only_in_milvus) > 0:
-                logger.error(
-                    f"PK(s) only in Milvus, not found in DuckDB: {list(only_in_milvus)}"
-                )
+                logger.error(f"PK(s) only in Milvus, not found in DuckDB: {list(only_in_milvus)}")
 
             compared_count += len(batch_pks)
             if compared_count in milestones_to_log_at:
-                percentage = (
-                    (compared_count * 100) // total_pks if total_pks > 0 else 100
-                )
+                percentage = (compared_count * 100) // total_pks if total_pks > 0 else 100
                 logger.info(
-                    f"Comparison progress for '{collection_name}': {compared_count}/{total_pks} ({percentage}%) checked."
+                    f"Comparison progress for '{collection_name}': {compared_count}/{total_pks} "
+                    f"({percentage}%) checked."
                 )
 
-        logger.info(
-            f"Successfully completed comparison for {total_pks} entries in collection '{collection_name}'."
-        )
+        logger.info(f"Successfully completed comparison for {total_pks} entries in collection '{collection_name}'.")
 
     def _milvus_dtype_to_duckdb(self, milvus_type):
         MilvusDataTypeToDuckDBType = {

@@ -22,3 +22,33 @@ build-backend = "pdm.backend"
 
 [tool.pdm]
 distribution = true
+
+# Ruff configuration for linting and formatting
+[tool.ruff]
+# Maximum allowed line length
+line-length = 120
+# Target Python version
+target-version = "py39"
+# Excluded directories and files
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".venv",
+    ".mypy_cache",
+    ".vscode"
+]
+# Enabled linting rules: E (pycodestyle), F (pyflakes), I (isort), B (bugbear), UP (pyupgrade)
+# Enable auto-fix for lint errors
+fix = true
+
+[tool.ruff.lint]
+# Enabled linting rules: E (pycodestyle), F (pyflakes), I (isort), B (bugbear), UP (pyupgrade)
+select = [
+    "E",
+    "F",
+    "I",
+    "B",
+    "UP"
+]

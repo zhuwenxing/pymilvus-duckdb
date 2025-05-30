@@ -1,14 +1,14 @@
 # Configuration section
 # Define the Milvus client and collection name
-from pymilvus_duckdb import MilvusDuckDBClient as MilvusClient
-from pymilvus.milvus_client import IndexParams
-from pymilvus import DataType
 import random
 import time
 
-milvus_client = MilvusClient(
-    uri="http://10.104.21.143:19530", duckdb_dir="./tmp/duckdb"
-)
+from pymilvus import DataType
+from pymilvus.milvus_client import IndexParams
+
+from pymilvus_duckdb import MilvusDuckDBClient as MilvusClient
+
+milvus_client = MilvusClient(uri="http://10.104.21.143:19530", duckdb_dir="./tmp/duckdb")
 collection_name = f"test_collection_demo_{int(time.time())}"
 
 # Define the schema for the collection
@@ -17,16 +17,12 @@ schema.add_field("id", DataType.INT64, is_primary=True, auto_id=False)
 schema.add_field("name", DataType.VARCHAR, max_length=100)
 schema.add_field("age", DataType.INT64)
 schema.add_field("json_field", DataType.JSON)
-schema.add_field(
-    "array_field", DataType.ARRAY, element_type=DataType.INT64, max_capacity=10
-)
+schema.add_field("array_field", DataType.ARRAY, element_type=DataType.INT64, max_capacity=10)
 schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=8)
 
 milvus_client.create_collection(collection_name, schema)
 index_params = IndexParams()
-index_params.add_index(
-    "embedding", metric_type="L2", index_type="IVF_FLAT", params={"nlist": 128}
-)
+index_params.add_index("embedding", metric_type="L2", index_type="IVF_FLAT", params={"nlist": 128})
 
 milvus_client.create_index(collection_name, index_params)
 
