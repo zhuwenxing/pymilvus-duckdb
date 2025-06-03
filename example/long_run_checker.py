@@ -1,7 +1,6 @@
 import argparse
 import logging
 import random
-import threading
 import time
 
 from pymilvus import DataType
@@ -18,18 +17,13 @@ DUCKDB_DIR = "./tmp/duckdb_complex"  # Directory to store DuckDB data
 COLLECTION_NAME_PREFIX = "complex_test_collection"
 
 DIMENSION = 8  # Embedding vector dimension
-BATCH_SIZE = 1000  # Number of records per batch operation
+LARGE_BATCH_SIZE = 10000  # Number of records for initial large insert
+SMALL_BATCH_SIZE = 1000  # Number of records per small batch operation
+DELETE_BATCH_SIZE = 500  # Number of records to delete per batch
+UPSERT_BATCH_SIZE = 300  # Number of records to upsert per batch
 
-# Ratios of insert, delete, upsert operations
-INSERT_RATIO = 0.6
-DELETE_RATIO = 0.2
-UPSERT_RATIO = 0.2
-
-
-
+# Global ID counter
 global_id = 0
-id_lock = threading.Lock()
-
 
 def generate_data(start_id, count, for_upsert=False):
     data = []
@@ -51,97 +45,57 @@ def generate_data(start_id, count, for_upsert=False):
         data.append(record)
     return data
 
-
-def insert_worker(stop_event, milvus_client, collection_name):
-    """Insert worker thread, each loop allocates id from shared global_id."""
+def perform_large_insert(milvus_client, collection_name):
+    """Perform initial large insert operation"""
     global global_id
-    while not stop_event.is_set():
-        try:
-            # 在执行操作前再次检查停止信号
-            if stop_event.is_set():
-                break
-                
-            # Thread-safe allocation of unique id range for insert
-            with id_lock:
-                start_id = global_id
-                batch_size = BATCH_SIZE
-                global_id += batch_size
-            batch_data = generate_data(start_id, batch_size)
-            milvus_client.insert(collection_name, batch_data)
-            logging.info(f"[INSERT] Inserted {batch_size} records, start id: {start_id}")
-        except Exception as e:
-            logging.error(f"[INSERT] Exception: {e}", exc_info=True)
-        
-        # 使用较短的检查间隔，能更快响应停止信号
-        for _ in range(10):  # 分成10次，每次0.1秒
-            if stop_event.is_set():
-                break
-            time.sleep(0.1)
+    
+    start_id = global_id
+    batch_data = generate_data(start_id, LARGE_BATCH_SIZE)
+    global_id += LARGE_BATCH_SIZE
+    
+    milvus_client.insert(collection_name, batch_data)
+    logging.info(f"[LARGE INSERT] Inserted {LARGE_BATCH_SIZE} records, start id: {start_id}")
 
-def delete_worker(stop_event, milvus_client: MilvusClient, collection_name):
-    """Delete worker thread, each loop allocates id from shared global_id, id range according to ratio."""
+def perform_small_insert(milvus_client, collection_name):
+    """Perform small insert operation"""
     global global_id
-    while not stop_event.is_set():
-        try:
-            # 在执行操作前再次检查停止信号
-            if stop_event.is_set():
-                break
-                
-            # Thread-safe allocation of unique id range for delete
-            with id_lock:
-                start_id = global_id - BATCH_SIZE*2
-                delete_batch_size = max(1, int(BATCH_SIZE * (DELETE_RATIO / INSERT_RATIO)))
-                # global_id += delete_batch_size
-            ids_batch = list(range(start_id, start_id + delete_batch_size))
-            milvus_client.delete(collection_name, ids=ids_batch)
-            logging.info(f"[DELETE] Deleted {len(ids_batch)} records, start id: {start_id}")
-        except Exception as e:
-            logging.error(f"[DELETE] Exception: {e}", exc_info=True)
-        
-        # 使用较短的检查间隔，能更快响应停止信号
-        for _ in range(100):  # 分成100次，每次0.1秒，总共10秒
-            if stop_event.is_set():
-                break
-            time.sleep(0.1)
+    
+    start_id = global_id
+    batch_data = generate_data(start_id, SMALL_BATCH_SIZE)
+    global_id += SMALL_BATCH_SIZE
+    
+    milvus_client.insert(collection_name, batch_data)
+    logging.info(f"[SMALL INSERT] Inserted {SMALL_BATCH_SIZE} records, start id: {start_id}")
 
-
-def upsert_worker(stop_event, milvus_client, collection_name):
-    """Upsert worker thread, each loop allocates id from shared global_id, id range according to ratio."""
+def perform_delete(milvus_client: MilvusClient, collection_name):
+    """Perform delete operation"""
     global global_id
-    while not stop_event.is_set():
-        try:
-            # 在执行操作前再次检查停止信号
-            if stop_event.is_set():
-                break
-                
-            # Thread-safe allocation of unique id range for upsert
-            with id_lock:
-                start_id = global_id - BATCH_SIZE
-                upsert_batch_size = max(1, int(BATCH_SIZE * (UPSERT_RATIO / INSERT_RATIO)))
-                # global_id += upsert_batch_size
-            batch_data = generate_data(start_id, upsert_batch_size, for_upsert=True)
-            milvus_client.upsert(collection_name, batch_data)
-            logging.info(f"[UPSERT] Upserted {len(batch_data)} records, start id: {start_id}")
-        except Exception as e:
-            logging.error(f"[UPSERT] Exception: {e}", exc_info=True)
-        
-        # 使用较短的检查间隔，能更快响应停止信号
-        for _ in range(10):  # 分成10次，每次0.1秒
-            if stop_event.is_set():
-                break
-            time.sleep(0.1)
+    
+    # Delete from existing data range
+    start_id = max(0, global_id - LARGE_BATCH_SIZE)
+    end_id = start_id + DELETE_BATCH_SIZE
+    ids_batch = list(range(start_id, end_id))
+    
+    milvus_client.delete(collection_name, ids=ids_batch)
+    logging.info(f"[DELETE] Deleted {len(ids_batch)} records, start id: {start_id}")
 
-
+def perform_upsert(milvus_client, collection_name):
+    """Perform upsert operation"""
+    global global_id
+    
+    # Upsert existing data range
+    start_id = max(0, global_id - LARGE_BATCH_SIZE // 2)
+    batch_data = generate_data(start_id, UPSERT_BATCH_SIZE, for_upsert=True)
+    
+    milvus_client.upsert(collection_name, batch_data)
+    logging.info(f"[UPSERT] Upserted {len(batch_data)} records, start id: {start_id}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Long run checker with error catching and duration control.")
-    parser.add_argument('--insert_duration', type=int, default=30, help='How many seconds to run insert (default 120)')
-    parser.add_argument('--duration', type=int, default=60, help='How many seconds to run (default 360)')
+    parser = argparse.ArgumentParser(description="Sequential long run checker with large insert followed by repeated small operations.")
+    parser.add_argument('--repeat_cycles', type=int, default=10, help='Number of repeat cycles for (small insert -> delete -> upsert) (default 10)')
     args = parser.parse_args()
 
-    stop_event = threading.Event()
-
-    # create collection
+    # Create collection
     milvus_client = MilvusClient(uri=MILVUS_URI, duckdb_dir=DUCKDB_DIR)
     collection_name = f"{COLLECTION_NAME_PREFIX}_{int(time.time())}"
     logging.info(f"Using collection: {collection_name}")
@@ -168,50 +122,42 @@ if __name__ == "__main__":
     logging.info(f"Collection '{collection_name}' loaded.")
     time.sleep(2)
 
-    # start three worker threads
-    insert_thread = threading.Thread(target=insert_worker, 
-                                     args=(stop_event, milvus_client, collection_name), 
-                                     daemon=True)
-    delete_thread = threading.Thread(target=delete_worker, 
-                                     args=(stop_event, milvus_client, collection_name), 
-                                     daemon=True)
-    upsert_thread = threading.Thread(target=upsert_worker, 
-                                     args=(stop_event, milvus_client, collection_name), 
-                                     daemon=True)
-    
-    # 启动插入线程
-    insert_thread.start()
-    logging.info(f"Insert thread started, will run for {args.insert_duration} seconds...")
-    
-    # 等待指定时间后启动删除和更新线程
-    time.sleep(args.insert_duration)
-    delete_thread.start()
-    upsert_thread.start()
-    logging.info("Delete and upsert threads started...")
-    
-    logging.info(f"Long run checker started, will run for {args.duration} seconds...")
     try:
-        time.sleep(args.duration)
+        # Step 1: Perform large insert operation
+        logging.info("=" * 50)
+        logging.info("Starting large insert operation...")
+        perform_large_insert(milvus_client, collection_name)
+        logging.info("Large insert operation completed.")
+        
+        # Step 2: Repeat small operations cycle
+        logging.info("=" * 50)
+        logging.info(f"Starting {args.repeat_cycles} cycles of (small insert -> delete -> upsert)...")
+        
+        for cycle in range(args.repeat_cycles):
+            logging.info(f"--- Cycle {cycle + 1}/{args.repeat_cycles} ---")
+            
+            # Small insert
+            perform_small_insert(milvus_client, collection_name)
+            time.sleep(1)  # Brief pause between operations
+            
+            # Delete
+            perform_delete(milvus_client, collection_name)
+            time.sleep(1)  # Brief pause between operations
+            
+            # Upsert
+            perform_upsert(milvus_client, collection_name)
+            time.sleep(1)  # Brief pause between operations
+            
+            logging.info(f"Cycle {cycle + 1} completed.")
+    
     except KeyboardInterrupt:
         logging.info("Received KeyboardInterrupt, exiting early...")
-    
-    # 设置停止事件，通知所有线程停止
-    stop_event.set()
-    logging.info("Stop event set, waiting for threads to finish...")
-    
-    # 等待所有线程结束，不设置超时确保真正等待线程完成
-    if insert_thread.is_alive():
-        logging.info("Waiting for insert thread to finish...")
-        insert_thread.join()
-    if delete_thread.is_alive():
-        logging.info("Waiting for delete thread to finish...")
-        delete_thread.join()
-    if upsert_thread.is_alive():
-        logging.info("Waiting for upsert thread to finish...")
-        upsert_thread.join()
-    
-    logging.info("All threads finished.")
+    except Exception as e:
+        logging.error(f"Exception occurred: {e}", exc_info=True)
 
-    logging.info("Long run checker finished.")
-    # check collection
+    logging.info("=" * 50)
+    logging.info("Sequential operations completed.")
+    
+    # Check collection
+    logging.info("Performing entity comparison check...")
     milvus_client.entity_compare(collection_name)
