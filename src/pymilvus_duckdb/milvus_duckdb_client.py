@@ -1,7 +1,8 @@
 import json
-import random
+import threading
 from pathlib import Path
-
+import uuid
+import os
 import duckdb
 import numpy as np
 import pandas as pd
@@ -24,9 +25,18 @@ class MilvusDuckDBClient(MilvusClient):
         connections.connect(uri=uri, token=token)
         host = uri.split("://")[1].split(":")[0]
         duckdb_dir = kwargs.get("duckdb_dir", BASE_DIR)
-        duckdb_path = f"{duckdb_dir}/{host}.db"
+        duckdb_path = f"{duckdb_dir}/{host}/{uuid.uuid4()}.db"
         logger.info(f"Initializing MilvusDuckDBClient with Milvus URI: '{uri}', DuckDB path: '{duckdb_path}'")
         Path(duckdb_path).parent.mkdir(parents=True, exist_ok=True)
+        wal_path = duckdb_path + ".wal"
+        if os.path.exists(wal_path):
+            try:
+                # try to open the database in read-only mode
+                test_conn = duckdb.connect(duckdb_path, read_only=True)
+                test_conn.close()
+            except Exception as e:
+                logger.warning(f"connection failed with error: {e}, WAL file is corrupted, automatically deleted: {wal_path}")
+                os.remove(wal_path)
         self.duck_conn = duckdb.connect(duckdb_path)
         self.fields = []
         self.primary_field = ""
@@ -35,9 +45,16 @@ class MilvusDuckDBClient(MilvusClient):
         self.array_fields = []
         self.varchar_fields = []
         self.float_vector_fields = []
+        # DuckDB 连接不是线程安全的，需要锁来保护写操作
+        # 读操作通常不需要锁，但写操作（insert, delete, upsert）需要保护
+        # 因为它们涉及事务管理和与 Milvus 的原子性操作
+        self._duckdb_lock = threading.Lock()
 
     def __del__(self):
-        self.duck_conn.close()
+        try:
+            self.duck_conn.close()
+        except Exception as e:
+            logger.error(f"Failed to close DuckDB connection: {e}")
 
     def _get_schema(self, collection_name: str):
         c = Collection(collection_name)
@@ -133,84 +150,87 @@ class MilvusDuckDBClient(MilvusClient):
         Insert data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
         """
-        self._get_schema(collection_name)
-        df = pd.DataFrame(data)
-        for field in self.json_fields:
-            df[field] = df[field].apply(lambda x: json.dumps(x))
-        self.duck_conn.register("df", df)
-        try:
-            self.duck_conn.execute("BEGIN TRANSACTION;")
-            # Insert into DuckDB
-            # data: [{"id": 1, "name": "test", "embedding": [0.1, 0.2, 0.3]}, ...]
-            self.duck_conn.execute(f"INSERT INTO {collection_name} SELECT * FROM df")
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # DuckDB write failed, return failure
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"DuckDB insert failed: {e}") from e
-        try:
-            # Insert into Milvus
-            result = super().insert(collection_name, data, **kwargs)
-            self.duck_conn.execute("COMMIT;")
-            return result
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # Milvus write failed, rollback DuckDB
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"Milvus insert failed, DuckDB rolled back: {e}") from e
+        with self._duckdb_lock:
+            self._get_schema(collection_name)
+            df = pd.DataFrame(data)
+            for field in self.json_fields:
+                df[field] = df[field].apply(lambda x: json.dumps(x))
+            self.duck_conn.register("df", df)
+            try:
+                self.duck_conn.execute("BEGIN TRANSACTION;")
+                # Insert into DuckDB
+                # data: [{"id": 1, "name": "test", "embedding": [0.1, 0.2, 0.3]}, ...]
+                self.duck_conn.execute(f"INSERT INTO {collection_name} SELECT * FROM df")
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # DuckDB write failed, return failure
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"DuckDB insert failed: {e}") from e
+            try:
+                # Insert into Milvus
+                result = super().insert(collection_name, data, **kwargs)
+                self.duck_conn.execute("COMMIT;")
+                return result
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # Milvus write failed, rollback DuckDB
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"Milvus insert failed, DuckDB rolled back: {e}") from e
 
     def delete(self, collection_name: str, ids: list[int | str], **kwargs):
         """
         Delete data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
         """
-        try:
-            self.duck_conn.execute("BEGIN TRANSACTION;")
-            # Parse ids and delete from DuckDB
-            # ids: [1,2,3]
-            delete_sql = f"DELETE FROM {collection_name} WHERE {self.primary_field} IN ({','.join(map(str, ids))})"
-            self.duck_conn.execute(delete_sql)
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"DuckDB delete failed: {e}") from e
-        try:
-            result = super().delete(collection_name, ids=ids, **kwargs)
-            self.duck_conn.execute("COMMIT;")
-            return result
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"Milvus delete failed, DuckDB rolled back: {e}") from e
+        with self._duckdb_lock:
+            try:
+                self.duck_conn.execute("BEGIN TRANSACTION;")
+                # Parse ids and delete from DuckDB
+                # ids: [1,2,3]
+                delete_sql = f"DELETE FROM {collection_name} WHERE {self.primary_field} IN ({','.join(map(str, ids))})"
+                self.duck_conn.execute(delete_sql)
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"DuckDB delete failed: {e}") from e
+            try:
+                result = super().delete(collection_name, ids=ids, **kwargs)
+                self.duck_conn.execute("COMMIT;")
+                return result
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"Milvus delete failed, DuckDB rolled back: {e}") from e
 
     def upsert(self, collection_name: str, data: list[dict], **kwargs):
         """
         Upsert data with transaction logic: write to DuckDB first, if success then write to Milvus.
         If Milvus fails, rollback DuckDB transaction. Ensure data consistency.
         """
-        self._get_schema(collection_name)
-        df = pd.DataFrame(data)
-        for field in self.json_fields:
-            df[field] = df[field].apply(lambda x: json.dumps(x))
-        self.duck_conn.register("df", df)
-        try:
-            self.duck_conn.execute("BEGIN TRANSACTION;")
-            self.duck_conn.execute(f"""INSERT INTO {collection_name}
+        with self._duckdb_lock:
+            self._get_schema(collection_name)
+            df = pd.DataFrame(data)
+            for field in self.json_fields:
+                df[field] = df[field].apply(lambda x: json.dumps(x))
+            self.duck_conn.register("df", df)
+            try:
+                self.duck_conn.execute("BEGIN TRANSACTION;")
+                self.duck_conn.execute(f"""INSERT INTO {collection_name}
                                         SELECT * FROM df
                                         ON CONFLICT ({self.primary_field}) DO UPDATE SET
                                         {", ".join([f"{col} = EXCLUDED.{col}" for col in self.fields_name_list])}""")
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"DuckDB upsert failed: {e}") from e
-        try:
-            result = super().upsert(collection_name, data, **kwargs)
-            self.duck_conn.execute("COMMIT;")
-            return result
-        except Exception as e:
-            self.duck_conn.execute("ROLLBACK;")
-            # Raise with exception context for better debugging
-            raise RuntimeError(f"Milvus upsert failed, DuckDB rolled back: {e}") from e
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"DuckDB upsert failed: {e}") from e
+            try:
+                result = super().upsert(collection_name, data, **kwargs)
+                self.duck_conn.execute("COMMIT;")
+                return result
+            except Exception as e:
+                self.duck_conn.execute("ROLLBACK;")
+                # Raise with exception context for better debugging
+                raise RuntimeError(f"Milvus upsert failed, DuckDB rolled back: {e}") from e
 
     def _milvus_filter_to_sql(self, filter: str):
         """
@@ -285,10 +305,33 @@ class MilvusDuckDBClient(MilvusClient):
 
     def count(self, collection_name: str):
         milvus_count = super().query(collection_name, filter="", output_fields=["count(*)"])
-        duckdb_count = self.duck_conn.execute(f"SELECT COUNT(*) FROM {collection_name}").fetchone()
+        
+        # 检查 DuckDB 表是否存在
+        try:
+            table_exists = self.duck_conn.execute(
+                f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{collection_name}'"
+            ).fetchone()[0] > 0
+            
+            if not table_exists:
+                logger.error(f"DuckDB table '{collection_name}' does not exist.")
+                duckdb_count_value = 0
+            else:
+                duckdb_count = self.duck_conn.execute(f"SELECT COUNT(*) FROM {collection_name}").fetchone()
+                
+                # 处理 duckdb_count 为 None 的情况
+                if duckdb_count is None:
+                    logger.error(f"DuckDB count query returned None for collection '{collection_name}'. "
+                                 f"This might indicate a transaction or connection issue.")
+                    duckdb_count_value = 0
+                else:
+                    duckdb_count_value = duckdb_count[0]
+        except Exception as e:
+            logger.error(f"Failed to query DuckDB count for collection '{collection_name}': {e}")
+            duckdb_count_value = 0
+        
         res = {
             "milvus_count": milvus_count[0]["count(*)"],
-            "duckdb_count": duckdb_count[0],
+            "duckdb_count": duckdb_count_value,
         }
         return res
 

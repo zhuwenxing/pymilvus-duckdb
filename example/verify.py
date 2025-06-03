@@ -12,4 +12,4 @@ COLLECTION_NAME = "complex_test_collection_1748571650"
 
 milvus_client = MilvusClient(uri=MILVUS_URI, duckdb_dir=DUCKDB_DIR)
 print("compare")
-milvus_client.compare(COLLECTION_NAME)
+milvus_client.entity_compare(COLLECTION_NAME)
